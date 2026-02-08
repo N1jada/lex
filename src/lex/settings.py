@@ -94,9 +94,20 @@ LEGISLATION_NAME_MAPPING = {
 CURRENT_YEAR = datetime.now().year
 YEARS = list(range(1267, CURRENT_YEAR + 1))  # Includes current year
 
-# Azure OpenAI embedding configuration
+# OpenAI configuration
+# Supports both standard OpenAI and Azure OpenAI.
+# Set OPENAI_API_KEY for standard OpenAI, or AZURE_OPENAI_API_KEY + AZURE_OPENAI_ENDPOINT for Azure.
 EMBEDDING_DIMENSIONS = 1024
-EMBEDDING_DEPLOYMENT = os.environ.get("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "text-embedding-3-large")
+EMBEDDING_MODEL = os.environ.get(
+    "OPENAI_EMBEDDING_MODEL",
+    os.environ.get("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "text-embedding-3-large"),
+)
+# Keep legacy alias
+EMBEDDING_DEPLOYMENT = EMBEDDING_MODEL
+
+USE_AZURE_OPENAI = bool(os.environ.get("AZURE_OPENAI_API_KEY")) and bool(
+    os.environ.get("AZURE_OPENAI_ENDPOINT")
+)
 
 # PostHog Analytics configuration (cookieless, EU region, GDPR compliant)
 POSTHOG_KEY = os.environ.get("POSTHOG_KEY", "")

@@ -4,18 +4,18 @@ import random
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 from fastembed import SparseTextEmbedding
-from openai import APIConnectionError, APITimeoutError, AzureOpenAI, RateLimitError
+from openai import APIConnectionError, APITimeoutError, AzureOpenAI, OpenAI, RateLimitError
 from qdrant_client.models import SparseVector
 
-from lex.settings import EMBEDDING_DEPLOYMENT, EMBEDDING_DIMENSIONS
+from lex.settings import EMBEDDING_DEPLOYMENT, EMBEDDING_DIMENSIONS, USE_AZURE_OPENAI
 
 logger = logging.getLogger(__name__)
 
-# Initialize Azure OpenAI client
-_openai_client = None
+# Initialize OpenAI client (Azure or standard)
+_openai_client: Union[AzureOpenAI, OpenAI, None] = None
 _openai_client_lock = threading.Lock()
 
 # Initialize FastEmbed BM25 model (lazy loading)
@@ -27,26 +27,35 @@ MAX_RETRIES = 10
 BASE_BACKOFF = 1.0  # seconds
 MAX_BACKOFF = 120.0  # Cap backoff at 2 minutes
 
-# Parallelism config - keep low to avoid Azure OpenAI rate limits
+# Parallelism config - keep low to avoid rate limits
 DEFAULT_MAX_WORKERS = int(os.environ.get("EMBEDDING_MAX_WORKERS", "5"))
 
 
-def get_openai_client() -> AzureOpenAI:
-    """Lazy load Azure OpenAI client (thread-safe)."""
+def get_openai_client() -> Union[AzureOpenAI, OpenAI]:
+    """Lazy load OpenAI client — Azure or standard (thread-safe)."""
     global _openai_client
     if _openai_client is None:
         with _openai_client_lock:
             # Double-check after acquiring lock
             if _openai_client is None:
-                logger.info("Initializing Azure OpenAI client...")
-                _openai_client = AzureOpenAI(
-                    api_key=os.environ.get("AZURE_OPENAI_API_KEY"),
-                    api_version="2024-02-01",
-                    azure_endpoint=os.environ.get("AZURE_OPENAI_ENDPOINT"),
-                    max_retries=0,  # We handle retries manually
-                    timeout=60.0,  # 60 second timeout for embedding generation
-                )
-                logger.info("Azure OpenAI client initialized")
+                if USE_AZURE_OPENAI:
+                    logger.info("Initializing Azure OpenAI client...")
+                    _openai_client = AzureOpenAI(
+                        api_key=os.environ.get("AZURE_OPENAI_API_KEY"),
+                        api_version="2024-02-01",
+                        azure_endpoint=os.environ.get("AZURE_OPENAI_ENDPOINT"),
+                        max_retries=0,  # We handle retries manually
+                        timeout=60.0,
+                    )
+                    logger.info("Azure OpenAI client initialized")
+                else:
+                    logger.info("Initializing standard OpenAI client...")
+                    _openai_client = OpenAI(
+                        api_key=os.environ.get("OPENAI_API_KEY"),
+                        max_retries=0,  # We handle retries manually
+                        timeout=60.0,
+                    )
+                    logger.info("Standard OpenAI client initialized")
     return _openai_client
 
 
@@ -65,7 +74,7 @@ def get_sparse_model() -> SparseTextEmbedding:
 
 def generate_dense_embedding_with_retry(text: str, max_retries: int = MAX_RETRIES) -> List[float]:
     """
-    Generate dense embedding using Azure OpenAI with retry logic for rate limits.
+    Generate dense embedding using OpenAI with retry logic for rate limits.
 
     Args:
         text: Text to embed (max ~8K tokens for text-embedding-3-large)

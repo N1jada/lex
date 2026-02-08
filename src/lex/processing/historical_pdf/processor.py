@@ -1,8 +1,10 @@
 """
-PDF processor for historical UK legislation using Azure OpenAI Responses API.
+PDF processor for historical UK legislation using OpenAI Responses API.
 
 This module handles OCR and structured extraction from scanned historical legislation PDFs
 using GPT-5-mini vision capabilities with Langfuse tracing for observability.
+
+Supports both standard OpenAI and Azure OpenAI — controlled by USE_AZURE_OPENAI setting.
 """
 
 import asyncio
@@ -10,10 +12,10 @@ import logging
 import os
 import time
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 from langfuse import Langfuse, observe
-from openai import AsyncAzureOpenAI, RateLimitError
+from openai import AsyncAzureOpenAI, AsyncOpenAI, RateLimitError
 from tenacity import (
     before_sleep_log,
     retry,
@@ -27,6 +29,7 @@ from lex.processing.historical_pdf.models import (
     ExtractionResult,
     LegislationMetadata,
 )
+from lex.settings import USE_AZURE_OPENAI
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +44,7 @@ PROMPT_VERSION = "1.1"  # For provenance tracking (v1.1: Added ISO 8601 date for
 
 class LegislationPDFProcessor:
     """
-    Process historical UK legislation PDFs using Azure OpenAI Responses API.
+    Process historical UK legislation PDFs using OpenAI Responses API.
 
     Features:
     - Native PDF processing with GPT-5-mini vision
@@ -49,6 +52,7 @@ class LegislationPDFProcessor:
     - Langfuse tracing for observability
     - Automatic retry logic for rate limits
     - Prompt caching optimization
+    - Supports both standard OpenAI and Azure OpenAI
 
     Usage:
         processor = LegislationPDFProcessor()
@@ -65,35 +69,51 @@ class LegislationPDFProcessor:
         langfuse_host: Optional[str] = None,
     ):
         """
-        Initialize PDF processor with Azure OpenAI and Langfuse.
+        Initialize PDF processor with OpenAI and Langfuse.
 
         Args:
-            azure_endpoint: Azure OpenAI endpoint (from env if not provided)
-            api_key: Azure OpenAI API key (from env if not provided)
+            azure_endpoint: Azure OpenAI endpoint (from env if not provided, Azure mode only)
+            api_key: OpenAI API key (from env if not provided)
             model: Model to use (default: gpt-5-mini)
             langfuse_public_key: Langfuse public key (from env if not provided)
             langfuse_secret_key: Langfuse secret key (from env if not provided)
             langfuse_host: Langfuse host URL (from env if not provided)
         """
-        # Azure OpenAI setup
-        self.azure_endpoint = azure_endpoint or os.getenv("AZURE_OPENAI_ENDPOINT")
-        self.api_key = api_key or os.getenv("AZURE_OPENAI_API_KEY")
         self.model = model
 
-        if not self.azure_endpoint or not self.api_key:
-            raise ValueError(
-                "Azure OpenAI credentials missing. Set AZURE_OPENAI_ENDPOINT "
-                "and AZURE_OPENAI_API_KEY environment variables."
-            )
+        # Initialize async OpenAI client — Azure or standard
+        if USE_AZURE_OPENAI:
+            self.azure_endpoint = azure_endpoint or os.getenv("AZURE_OPENAI_ENDPOINT")
+            self.api_key = api_key or os.getenv("AZURE_OPENAI_API_KEY")
 
-        # Initialize async Azure OpenAI client with generous timeout
-        self.client = AsyncAzureOpenAI(
-            azure_endpoint=self.azure_endpoint,
-            api_key=self.api_key,
-            api_version="2025-03-01-preview",  # Responses API requires 2025-03-01-preview or later
-            max_retries=0,  # We handle retries manually
-            timeout=API_TIMEOUT_SECONDS,  # 15 minutes for large PDFs
-        )
+            if not self.azure_endpoint or not self.api_key:
+                raise ValueError(
+                    "Azure OpenAI credentials missing. Set AZURE_OPENAI_ENDPOINT "
+                    "and AZURE_OPENAI_API_KEY environment variables."
+                )
+
+            self.client: Union[AsyncAzureOpenAI, AsyncOpenAI] = AsyncAzureOpenAI(
+                azure_endpoint=self.azure_endpoint,
+                api_key=self.api_key,
+                api_version="2025-03-01-preview",
+                max_retries=0,  # We handle retries manually
+                timeout=API_TIMEOUT_SECONDS,
+            )
+            logger.info("Using Azure OpenAI for PDF processing")
+        else:
+            self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+
+            if not self.api_key:
+                raise ValueError(
+                    "OpenAI API key missing. Set OPENAI_API_KEY environment variable."
+                )
+
+            self.client = AsyncOpenAI(
+                api_key=self.api_key,
+                max_retries=0,  # We handle retries manually
+                timeout=API_TIMEOUT_SECONDS,
+            )
+            logger.info("Using standard OpenAI for PDF processing")
 
         # Langfuse setup
         langfuse_public = langfuse_public_key or os.getenv("LANGFUSE_PUBLIC_KEY")
@@ -178,7 +198,7 @@ Handle document quality issues:
         self, pdf_url: str, prompt: Optional[str] = None, previous_response_id: Optional[str] = None
     ) -> Dict:
         """
-        Make a request to Azure OpenAI Responses API with retry logic.
+        Make a request to OpenAI Responses API with retry logic.
 
         Args:
             pdf_url: URL to PDF file (from legislation.gov.uk)
@@ -257,7 +277,7 @@ Handle document quality issues:
         max_pages_single_shot: int = 45,
     ) -> ExtractionResult:
         """
-        Process a PDF using Azure OpenAI Responses API with adaptive chunking.
+        Process a PDF using OpenAI Responses API with adaptive chunking.
 
         This method handles:
         - Direct URL access to PDFs (from legislation.gov.uk)
@@ -697,7 +717,7 @@ Handle document quality issues:
         )
 
     async def close(self):
-        """Close the Azure OpenAI client and flush Langfuse traces."""
+        """Close the OpenAI client and flush Langfuse traces."""
         await self.client.close()
         if self.langfuse:
             self.langfuse.flush()

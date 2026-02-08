@@ -4,15 +4,17 @@ import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from typing import Union
 
-from openai import AzureOpenAI
+from openai import AzureOpenAI, OpenAI
 
 from lex.caselaw.models import Caselaw, CaselawSummary
+from lex.settings import USE_AZURE_OPENAI
 
 logger = logging.getLogger(__name__)
 
-# Azure OpenAI client (lazy loaded)
-_openai_client: AzureOpenAI | None = None
+# OpenAI client (lazy loaded)
+_openai_client: Union[AzureOpenAI, OpenAI, None] = None
 
 # Token limits for GPT-5-nano (272K context window)
 # Using 90% of limit (~245K tokens, ~900K characters)
@@ -50,16 +52,22 @@ Write precisely and authoritatively. Use legal terminology appropriately but ens
 accessibility. Include key legal concepts and terms that researchers might search for."""
 
 
-def get_openai_client() -> AzureOpenAI:
-    """Lazy load Azure OpenAI client."""
+def get_openai_client() -> Union[AzureOpenAI, OpenAI]:
+    """Lazy load OpenAI client — Azure or standard."""
     global _openai_client
     if _openai_client is None:
-        _openai_client = AzureOpenAI(
-            api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-            api_version="2025-03-01-preview",  # GPT-5 Responses API
-            azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
-        )
-        logger.info("Azure OpenAI client initialised for caselaw summary generation")
+        if USE_AZURE_OPENAI:
+            _openai_client = AzureOpenAI(
+                api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+                api_version="2025-03-01-preview",  # GPT-5 Responses API
+                azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+            )
+            logger.info("Azure OpenAI client initialised for caselaw summary generation")
+        else:
+            _openai_client = OpenAI(
+                api_key=os.getenv("OPENAI_API_KEY"),
+            )
+            logger.info("Standard OpenAI client initialised for caselaw summary generation")
     return _openai_client
 
 
@@ -102,7 +110,7 @@ def generate_summary(
 
     try:
         openai_client = get_openai_client()
-        deployment = os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT", model)
+        deployment = os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT", model) if USE_AZURE_OPENAI else model
 
         logger.info(f"Generating summary for caselaw {caselaw.id} using {deployment}")
 

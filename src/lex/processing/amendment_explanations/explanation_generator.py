@@ -5,19 +5,20 @@ import os
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Union
 
-from openai import AzureOpenAI
+from openai import AzureOpenAI, OpenAI
 from requests.exceptions import HTTPError
 
 from lex.amendment.models import Amendment
 from lex.core.http import HttpClient
+from lex.settings import USE_AZURE_OPENAI
 
 logger = logging.getLogger(__name__)
 
 # Initialize clients
 _http_client: Optional[HttpClient] = None
-_openai_client: Optional[AzureOpenAI] = None
+_openai_client: Union[AzureOpenAI, OpenAI, None] = None
 
 
 def get_http_client() -> HttpClient:
@@ -47,16 +48,22 @@ def get_http_client() -> HttpClient:
     return _http_client
 
 
-def get_openai_client() -> AzureOpenAI:
-    """Lazy load Azure OpenAI client."""
+def get_openai_client() -> Union[AzureOpenAI, OpenAI]:
+    """Lazy load OpenAI client — Azure or standard."""
     global _openai_client
     if _openai_client is None:
-        _openai_client = AzureOpenAI(
-            api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-            api_version="2025-03-01-preview",  # GPT-5 Responses API
-            azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
-        )
-        logger.info("Azure OpenAI client initialized for amendment explanation generation")
+        if USE_AZURE_OPENAI:
+            _openai_client = AzureOpenAI(
+                api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+                api_version="2025-03-01-preview",  # GPT-5 Responses API
+                azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+            )
+            logger.info("Azure OpenAI client initialized for amendment explanation generation")
+        else:
+            _openai_client = OpenAI(
+                api_key=os.getenv("OPENAI_API_KEY"),
+            )
+            logger.info("Standard OpenAI client initialized for amendment explanation generation")
     return _openai_client
 
 
@@ -160,7 +167,7 @@ Write densely and efficiently. Favor clarity over length. Keep each part to 1-2 
 
     try:
         openai_client = get_openai_client()
-        deployment = os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT", model)
+        deployment = os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT", model) if USE_AZURE_OPENAI else model
 
         logger.info(f"Generating explanation for amendment {amendment.id} using {deployment}")
 
