@@ -237,8 +237,16 @@ def pipe_legislation_unified(
 def _is_content_valid(legislation_full: LegislationWithContent) -> bool:
     """Check if the legislation content is valid (not empty/too short)."""
     min_length = 100
+    # Check top-level text first (preamble/introductory text)
     text = legislation_full.text if hasattr(legislation_full, "text") else ""
-    return len(text.strip()) >= min_length
+    if len(text.strip()) >= min_length:
+        return True
+    # For acts whose content is split into sections, check section text
+    sections = getattr(legislation_full, "sections", [])
+    if sections:
+        total_section_text = sum(len(getattr(s, "text", "").strip()) for s in sections)
+        return total_section_text >= min_length
+    return False
 
 
 def _try_pdf_fallback(url: str) -> tuple[Legislation, list[LegislationSection]] | None:

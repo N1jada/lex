@@ -551,7 +551,7 @@ def main():
         elif isinstance(args.years, list) and args.years and isinstance(args.years[0], str):
             args.years = [int(year) for year in args.years]
 
-    if args.model in ["legislation", "legislation-section", "explanatory-note"]:
+    if args.model in ["legislation", "legislation-section", "legislation-unified", "explanatory-note"]:
         if args.types is None:
             args.types = list(LegislationType)
         else:
