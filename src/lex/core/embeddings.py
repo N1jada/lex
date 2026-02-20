@@ -1,4 +1,5 @@
 import logging
+import math
 import os
 import random
 import threading
@@ -6,6 +7,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional, Tuple, Union
 
+import tiktoken
 from fastembed import SparseTextEmbedding
 from openai import APIConnectionError, APITimeoutError, AzureOpenAI, OpenAI, RateLimitError
 from qdrant_client.models import SparseVector
@@ -21,6 +23,15 @@ _openai_client_lock = threading.Lock()
 # Initialize FastEmbed BM25 model (lazy loading)
 _sparse_model = None
 _sparse_model_lock = threading.Lock()
+
+# Initialize tiktoken encoder (lazy loading)
+_tokenizer: tiktoken.Encoding | None = None
+_tokenizer_lock = threading.Lock()
+
+# Chunking config
+MAX_EMBED_TOKENS = 8000  # Stay below OpenAI's 8192 limit
+CHUNK_TOKENS = 4000
+CHUNK_OVERLAP_TOKENS = 200
 
 # Rate limiting config
 MAX_RETRIES = 10
@@ -72,24 +83,54 @@ def get_sparse_model() -> SparseTextEmbedding:
     return _sparse_model
 
 
-def generate_dense_embedding_with_retry(text: str, max_retries: int = MAX_RETRIES) -> List[float]:
-    """
-    Generate dense embedding using OpenAI with retry logic for rate limits.
+def get_tokenizer() -> tiktoken.Encoding:
+    """Lazy load tiktoken cl100k_base encoder (thread-safe)."""
+    global _tokenizer
+    if _tokenizer is None:
+        with _tokenizer_lock:
+            if _tokenizer is None:
+                _tokenizer = tiktoken.get_encoding("cl100k_base")
+    return _tokenizer
+
+
+def chunk_text_by_tokens(
+    text: str,
+    max_tokens: int = CHUNK_TOKENS,
+    overlap_tokens: int = CHUNK_OVERLAP_TOKENS,
+) -> List[str]:
+    """Split text into overlapping chunks based on token count.
 
     Args:
-        text: Text to embed (max ~8K tokens for text-embedding-3-large)
-        max_retries: Maximum number of retry attempts
+        text: Text to chunk
+        max_tokens: Maximum tokens per chunk
+        overlap_tokens: Number of overlapping tokens between chunks
 
     Returns:
-        1024-dimensional vector
-
-    Raises:
-        Exception: If embedding generation fails after all retries
+        List of text chunks
     """
-    # Truncate very long texts (OpenAI limit ~8K tokens ≈ 30K chars)
-    if len(text) > 30000:
-        text = text[:30000]
+    tokenizer = get_tokenizer()
+    tokens = tokenizer.encode(text)
 
+    if len(tokens) <= max_tokens:
+        return [text]
+
+    chunks = []
+    start = 0
+    step = max_tokens - overlap_tokens
+
+    while start < len(tokens):
+        end = min(start + max_tokens, len(tokens))
+        chunk_tokens = tokens[start:end]
+        chunks.append(tokenizer.decode(chunk_tokens))
+        if end >= len(tokens):
+            break
+        start += step
+
+    return chunks
+
+
+def _embed_single_text(text: str, max_retries: int = MAX_RETRIES) -> List[float]:
+    """Embed a single text that fits within the token limit. No chunking."""
     client = get_openai_client()
 
     for attempt in range(max_retries):
@@ -121,8 +162,53 @@ def generate_dense_embedding_with_retry(text: str, max_retries: int = MAX_RETRIE
             logger.error(f"Non-retryable error generating embedding: {type(e).__name__}: {e}")
             raise
 
-    # Should never reach here, but if we do, raise
     raise Exception(f"Failed to generate embedding after {max_retries} retries")
+
+
+def _chunk_and_embed(text: str, max_retries: int = MAX_RETRIES) -> List[float]:
+    """Chunk a long text, embed each chunk, and return the averaged + L2-normalised vector."""
+    chunks = chunk_text_by_tokens(text)
+    logger.info(f"Chunking long text ({len(text)} chars) into {len(chunks)} chunks for embedding")
+
+    # Embed each chunk
+    vectors = [_embed_single_text(chunk, max_retries=max_retries) for chunk in chunks]
+
+    # Average element-wise
+    dim = len(vectors[0])
+    avg = [sum(v[i] for v in vectors) / len(vectors) for i in range(dim)]
+
+    # L2-normalise
+    norm = math.sqrt(sum(x * x for x in avg))
+    if norm > 0:
+        avg = [x / norm for x in avg]
+
+    return avg
+
+
+def generate_dense_embedding_with_retry(text: str, max_retries: int = MAX_RETRIES) -> List[float]:
+    """
+    Generate dense embedding using OpenAI with retry logic for rate limits.
+
+    For texts exceeding the token limit, automatically chunks, embeds each chunk
+    separately, then averages and L2-normalises the result.
+
+    Args:
+        text: Text to embed
+        max_retries: Maximum number of retry attempts
+
+    Returns:
+        1024-dimensional vector
+
+    Raises:
+        Exception: If embedding generation fails after all retries
+    """
+    tokenizer = get_tokenizer()
+    token_count = len(tokenizer.encode(text))
+
+    if token_count > MAX_EMBED_TOKENS:
+        return _chunk_and_embed(text, max_retries=max_retries)
+
+    return _embed_single_text(text, max_retries=max_retries)
 
 
 def generate_dense_embedding(text: str) -> List[float]:

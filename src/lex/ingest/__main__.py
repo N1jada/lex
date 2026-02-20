@@ -24,6 +24,7 @@ from lex.ingest.orchestrator import (
     run_daily_ingest,
     run_full_ingest,
 )
+from lex.legislation.models import LegislationType
 
 
 def main() -> int:
@@ -82,6 +83,14 @@ def main() -> int:
         help="Enable AI summary generation (Stage 2)",
     )
 
+    parser.add_argument(
+        "--types",
+        nargs="+",
+        choices=[t.value for t in LegislationType],
+        default=None,
+        help="Legislation types to ingest (e.g. uksi ukpga). Default: all types",
+    )
+
     args = parser.parse_args()
 
     # Configure logging
@@ -96,7 +105,13 @@ def main() -> int:
     logging.getLogger("httpcore").setLevel(logging.WARNING)
 
     logger = logging.getLogger(__name__)
-    logger.info(f"Starting ingest: mode={args.mode}, limit={args.limit}")
+
+    # Convert type strings to LegislationType enums
+    leg_types: list[LegislationType] | None = None
+    if args.types:
+        leg_types = [LegislationType(t) for t in args.types]
+
+    logger.info(f"Starting ingest: mode={args.mode}, limit={args.limit}, types={args.types}")
 
     try:
         if args.mode == "daily":
@@ -105,6 +120,7 @@ def main() -> int:
                     limit=args.limit,
                     enable_pdf_fallback=args.pdf_fallback,
                     enable_summaries=args.enable_summaries,
+                    types=leg_types,
                 )
             )
         elif args.mode == "amendments-led":
@@ -122,6 +138,7 @@ def main() -> int:
                     limit=args.limit,
                     enable_pdf_fallback=args.pdf_fallback,
                     enable_summaries=args.enable_summaries,
+                    types=leg_types,
                 )
             )
 

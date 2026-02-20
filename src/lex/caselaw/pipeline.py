@@ -61,7 +61,9 @@ def pipe_caselaw_sections(
     )
 
 
-def pipe_caselaw_unified(years: list[int], limit: int, types: list[Court], **kwargs):
+def pipe_caselaw_unified(
+    years: list[int], limit: int, types: list[Court], skip_urls: set[str] | None = None, **kwargs
+):
     """
     Unified pipeline that yields both Caselaw and CaselawSection documents.
 
@@ -83,7 +85,9 @@ def pipe_caselaw_unified(years: list[int], limit: int, types: list[Court], **kwa
 
     for year in years:
         for court_type in types:
-            content_iterator = scraper.load_content(years=[year], types=[court_type], limit=None)
+            content_iterator = scraper.load_content(
+                years=[year], types=[court_type], limit=None, skip_urls=skip_urls
+            )
 
             for url, soup in content_iterator:
                 if remaining_limit <= 0:

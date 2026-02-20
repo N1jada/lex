@@ -43,6 +43,7 @@ class CaselawScraper:
         limit: int | None = None,
         types: list[Court] | None = None,
         results_per_page: int = 50,
+        skip_urls: set[str] | None = None,
     ) -> Iterator[tuple[str, BeautifulSoup]]:
         """Scrapes National Archives content, returning tuples of (BeautifulSoup, case_url)."""
 
@@ -61,7 +62,11 @@ class CaselawScraper:
             page_offset=0, results_per_page=results_per_page, limit=limit, years=years, types=types
         )
 
+        skipped = 0
         for case_url in case_urls:
+            if skip_urls and case_url in skip_urls:
+                skipped += 1
+                continue
             try:
                 logger.debug(f"Requesting case from {case_url}")
                 xml_url = case_url + "/data.xml"
@@ -75,6 +80,9 @@ class CaselawScraper:
 
             except Exception as e:
                 logger.error(f"Error with case {case_url}: {str(e)}", exc_info=True)
+
+        if skipped:
+            logger.info(f"Skipped {skipped} already-ingested cases")
 
     def _get_request_url(
         self,
@@ -145,6 +153,7 @@ class CaselawScraper:
 
         page_counter = 0
         return_counter = 0
+        previous_url = None
         while limit is None or return_counter < limit:
             logger.debug(f"Requesting page {page_counter + 1} from {request_url}")
             try:
@@ -156,7 +165,8 @@ class CaselawScraper:
                     logger.debug(f"No cases found on page {page_counter + 1}")
                     # Still check for next page even if no cases on this page
                     next_url = self._get_next_page_url(soup)
-                    if next_url:
+                    if next_url and next_url != request_url:
+                        previous_url = request_url
                         request_url = next_url
                         page_counter += 1
                         continue
@@ -170,10 +180,12 @@ class CaselawScraper:
                     yield case
 
                 page_counter += 1
-                request_url = self._get_next_page_url(soup)
-                if not request_url:
+                next_url = self._get_next_page_url(soup)
+                if not next_url or next_url == request_url:
                     logger.debug(f"No more pages available after page {page_counter}")
                     break
+                previous_url = request_url
+                request_url = next_url
             except Exception as e:
                 if page_counter == 0:
                     logger.error(f"Error on first page for {request_url}: {str(e)}")
@@ -185,14 +197,16 @@ class CaselawScraper:
 
     def _get_cases_from_contents_soup(self, soup: BeautifulSoup) -> Iterator[str]:
         try:
-            judgments_table = soup.find("div", class_="judgments-table")
+            judgments_table = soup.find("div", class_="documents-table") or soup.find(
+                "div", class_="judgments-table"
+            )
             if not judgments_table:
-                logger.warning("No judgments-table div found in search results")
+                logger.warning("No judgments/documents-table div found in search results")
                 return []
 
             table = judgments_table.find("table")
             if not table:
-                logger.warning("No table found in judgments-table div")
+                logger.warning("No table found in documents-table div")
                 return []
 
             list_elements = table.find_all("tr")
@@ -217,8 +231,15 @@ class CaselawScraper:
             return []
 
     def _get_next_page_url(self, soup: BeautifulSoup) -> str | None:
+        # Try new GOV.UK Design System pagination first
+        nav = soup.find("nav", class_="govuk-pagination")
+        if nav:
+            next_link = nav.find("a", rel="next")
+            if next_link:
+                return self.BASE_URL + next_link["href"]
+            return None
+        # Fall back to old pagination class
         next_page = soup.find("a", class_="pagination__page-chevron-next")
         if next_page:
             return self.BASE_URL + next_page["href"]
-        else:
-            return None
+        return None

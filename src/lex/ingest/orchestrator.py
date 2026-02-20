@@ -64,6 +64,7 @@ async def run_daily_ingest(
     limit: int | None = None,
     enable_pdf_fallback: bool = False,
     enable_summaries: bool = False,
+    types: list[LegislationType] | None = None,
 ) -> dict:
     """Run daily incremental ingest.
 
@@ -73,21 +74,22 @@ async def run_daily_ingest(
         limit: Maximum number of items per source (None for unlimited)
         enable_pdf_fallback: Enable PDF processing for legislation without XML
         enable_summaries: Enable AI summary generation (Stage 2)
+        types: Legislation types to ingest (None for all types)
 
     Returns:
         Statistics about the ingest run
     """
     years = [date.today().year, date.today().year - 1]
-    logger.info(f"Starting daily ingest for years {years}, limit={limit}")
+    logger.info(f"Starting daily ingest for years {years}, limit={limit}, types={types}")
 
     stats = {}
 
     # Stage 1: Scrape sources (run in parallel using asyncio)
     # Note: caselaw ingest disabled - caselaw API has been taken down
     stage1_results = await asyncio.gather(
-        asyncio.to_thread(ingest_legislation, years, limit, enable_pdf_fallback),
+        asyncio.to_thread(ingest_legislation, years, limit, enable_pdf_fallback, types),
         asyncio.to_thread(ingest_amendments, years, limit),
-        asyncio.to_thread(ingest_explanatory_notes, years, limit),
+        asyncio.to_thread(ingest_explanatory_notes, years, limit, types),
         return_exceptions=True,
     )
 
@@ -115,6 +117,7 @@ async def run_full_ingest(
     limit: int | None = None,
     enable_pdf_fallback: bool = False,
     enable_summaries: bool = False,
+    types: list[LegislationType] | None = None,
 ) -> dict:
     """Run full historical ingest.
 
@@ -123,6 +126,7 @@ async def run_full_ingest(
         limit: Maximum number of items per source (None for unlimited)
         enable_pdf_fallback: Enable PDF processing for legislation without XML
         enable_summaries: Enable AI summary generation (Stage 2)
+        types: Legislation types to ingest (None for all types)
 
     Returns:
         Statistics about the ingest run
@@ -130,26 +134,29 @@ async def run_full_ingest(
     if years is None:
         years = list(range(1963, date.today().year + 1))
 
-    logger.info(f"Starting full ingest for {len(years)} years, limit={limit}")
+    logger.info(f"Starting full ingest for {len(years)} years, limit={limit}, types={types}")
 
     stats = {}
 
     # Stage 1: Scrape sources (sequential for full ingest to manage resources)
     # Note: caselaw ingest disabled - caselaw API has been taken down
-    stats["legislation"] = ingest_legislation(years, limit, enable_pdf_fallback)
+    stats["legislation"] = ingest_legislation(years, limit, enable_pdf_fallback, types)
     stats["amendments"] = ingest_amendments(years, limit)
-    stats["explanatory_notes"] = ingest_explanatory_notes(years, limit)
+    stats["explanatory_notes"] = ingest_explanatory_notes(years, limit, types)
 
     logger.info(f"Full ingest complete: {stats}")
     return stats
 
 
-def ingest_caselaw(years: list[int], limit: int | None = None) -> dict:
+def ingest_caselaw(
+    years: list[int], limit: int | None = None, courts: list[Court] | None = None
+) -> dict:
     """Ingest caselaw using the unified pipeline.
 
     Args:
         years: List of years to process
         limit: Maximum number of items (None for unlimited)
+        courts: Courts to process (None for all)
 
     Returns:
         Statistics about the ingest
@@ -174,12 +181,36 @@ def ingest_caselaw(years: list[int], limit: int | None = None) -> dict:
         "errors": 0,
     }
 
+    # Build set of existing caselaw URLs to skip scraping entirely
+    existing_urls: set[str] = set()
+    try:
+        _offset = None
+        while True:
+            result = qdrant_client.scroll(
+                CASELAW_COLLECTION,
+                limit=1000,
+                offset=_offset,
+                with_payload=["id"],
+                with_vectors=False,
+            )
+            points, _offset = result
+            for p in points:
+                if p.payload and "id" in p.payload:
+                    existing_urls.add(p.payload["id"])
+            if _offset is None:
+                break
+        logger.info(f"Found {len(existing_urls)} existing caselaw URLs to skip")
+    except Exception as e:
+        logger.info(f"Could not load existing URLs ({e}), will process all cases")
+
     # Collect docs, then batch embed when ready
     caselaw_docs: list = []
     section_docs: list = []
 
-    courts = list(Court)
-    pipeline = pipe_caselaw_unified(years=years, limit=limit, types=courts)
+    _courts = courts if courts else list(Court)
+    pipeline = pipe_caselaw_unified(
+        years=years, limit=limit, types=_courts, skip_urls=existing_urls
+    )
 
     for collection_type, doc in pipeline:
         try:
@@ -222,6 +253,7 @@ def ingest_legislation(
     years: list[int],
     limit: int | None = None,
     enable_pdf_fallback: bool = False,
+    types: list[LegislationType] | None = None,
 ) -> dict:
     """Ingest legislation using the unified pipeline.
 
@@ -229,13 +261,14 @@ def ingest_legislation(
         years: List of years to process
         limit: Maximum number of items (None for unlimited)
         enable_pdf_fallback: Enable PDF processing for legislation without XML
+        types: Legislation types to ingest (None for all types)
 
     Returns:
         Statistics about the ingest
     """
     logger.info(
         f"Starting legislation ingest: years={years}, limit={limit}, "
-        f"pdf_fallback={enable_pdf_fallback}"
+        f"pdf_fallback={enable_pdf_fallback}, types={types}"
     )
 
     # Ensure collections exist
@@ -260,11 +293,11 @@ def ingest_legislation(
     legislation_docs: list = []
     section_docs: list = []
 
-    types = list(LegislationType)
+    effective_types = types if types else list(LegislationType)
     pipeline = pipe_legislation_unified(
         years=years,
         limit=limit,
-        types=types,
+        types=effective_types,
         enable_pdf_fallback=enable_pdf_fallback,
     )
 
@@ -330,7 +363,7 @@ def ingest_amendments(years: list[int], limit: int | None = None) -> dict:
     }
 
     amendment_docs: list = []
-    pipeline = pipe_amendments(years=years, limit=limit or 0)
+    pipeline = pipe_amendments(years=years, limit=limit)
 
     for amendment in pipeline:
         try:
@@ -356,17 +389,22 @@ def ingest_amendments(years: list[int], limit: int | None = None) -> dict:
     return stats
 
 
-def ingest_explanatory_notes(years: list[int], limit: int | None = None) -> dict:
+def ingest_explanatory_notes(
+    years: list[int],
+    limit: int | None = None,
+    types: list[LegislationType] | None = None,
+) -> dict:
     """Ingest explanatory notes using the explanatory notes pipeline.
 
     Args:
         years: List of years to process
         limit: Maximum number of items (None for unlimited)
+        types: Legislation types to ingest (None for all types)
 
     Returns:
         Statistics about the ingest
     """
-    logger.info(f"Starting explanatory notes ingest: years={years}, limit={limit}")
+    logger.info(f"Starting explanatory notes ingest: years={years}, limit={limit}, types={types}")
 
     # Ensure collection exists
     create_collection_if_none(
@@ -381,8 +419,8 @@ def ingest_explanatory_notes(years: list[int], limit: int | None = None) -> dict
     }
 
     note_docs: list = []
-    types = list(LegislationType)
-    pipeline = pipe_explanatory_note(years=years, types=types, limit=limit)
+    effective_types = types if types else list(LegislationType)
+    pipeline = pipe_explanatory_note(years=years, types=effective_types, limit=limit)
 
     for note in pipeline:
         try:
