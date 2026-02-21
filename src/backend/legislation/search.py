@@ -81,15 +81,68 @@ async def legislation_section_search(
     return sections
 
 
+def _search_legislation_titles(
+    query: str,
+    type_selection: list[LegislationType] = None,
+    year_from: int = None,
+    year_to: int = None,
+    limit: int = 5,
+) -> list[str]:
+    """Search the legislation collection directly for title-level matches.
+
+    Catches queries like "equality act 2010" that match act titles but don't
+    produce good section-level matches, because individual sections contain
+    provision text without the parent act title.
+
+    Returns:
+        List of legislation IDs ordered by relevance.
+    """
+    if not query:
+        return []
+
+    try:
+        dense, sparse = generate_hybrid_embeddings(query)
+    except Exception:
+        logger.warning("Title search embedding failed, skipping title boost")
+        return []
+
+    conditions = []
+    if type_selection:
+        type_values = get_legislation_types(type_selection=type_selection)
+        if type_values:
+            conditions.append(
+                FieldCondition(key="type", match=MatchAny(any=type_values))
+            )
+    conditions.extend(build_year_filters(year_from, year_to, year_field="year"))
+
+    query_filter = Filter(must=conditions) if conditions else None
+
+    results = qdrant_client.query_points(
+        collection_name=LEGISLATION_COLLECTION,
+        query=FusionQuery(fusion=Fusion.DBSF),
+        prefetch=[
+            Prefetch(query=dense, using="dense", limit=limit * 3),
+            Prefetch(query=sparse, using="sparse", limit=limit),
+        ],
+        query_filter=query_filter,
+        limit=limit,
+        with_payload=["id"],
+    )
+
+    return [p.payload["id"] for p in results.points if p.payload.get("id")]
+
+
 @cached_search
 async def legislation_act_search(input: LegislationActSearch) -> dict:
     """Search for legislation using hybrid section search.
 
     Process:
     1. Search sections with hybrid embeddings (dense semantic + sparse BM25)
-    2. Group sections by parent legislation, keep top 10 per act
-    3. Batch lookup legislation metadata
-    4. Return ranked by best matching section scores
+    2. Search legislation collection directly for title-level matches
+    3. Merge results: title matches fill gaps where section search misses
+    4. Group sections by parent legislation, keep top 10 per act
+    5. Batch lookup legislation metadata
+    6. Return ranked results: title matches first, then by section scores
 
     Returns:
         dict with keys: results, total, offset, limit
@@ -122,13 +175,61 @@ async def legislation_act_search(input: LegislationActSearch) -> dict:
         score = scores.get(section.id, 0.0)
         legislation_sections[leg_id].append({"section": section, "score": score})
 
+    # Title-matching boost: search the legislation collection directly to catch
+    # queries like "equality act 2010" that match act titles but don't match
+    # well against individual section content (sections lack parent act titles)
+    title_match_ids = _search_legislation_titles(
+        input.query,
+        type_selection=input.legislation_type,
+        year_from=input.year_from,
+        year_to=input.year_to,
+    )
+
+    # For title matches not in section results, fetch their top sections
+    for leg_id in title_match_ids:
+        if leg_id not in legislation_sections:
+            points = qdrant_client.scroll(
+                collection_name=LEGISLATION_SECTION_COLLECTION,
+                scroll_filter=Filter(
+                    must=[
+                        FieldCondition(
+                            key="legislation_id", match=MatchValue(value=leg_id)
+                        )
+                    ]
+                ),
+                limit=10,
+                with_payload=[
+                    "id",
+                    "uri",
+                    "legislation_id",
+                    "title",
+                    "provision_type",
+                    "legislation_type",
+                    "legislation_year",
+                    "legislation_number",
+                    "extent",
+                ],
+                with_vectors=False,
+            )[0]
+            if points:
+                legislation_sections[leg_id] = [
+                    {"section": LegislationSection(**p.payload), "score": 1.0}
+                    for p in points
+                ]
+                logger.info(
+                    f"Title boost: added {len(points)} sections for {leg_id}"
+                )
+
     for leg_id in legislation_sections:
         legislation_sections[leg_id].sort(key=lambda x: x["score"], reverse=True)
         legislation_sections[leg_id] = legislation_sections[leg_id][:10]
 
-    # Pagination
+    # Pagination — title matches first, then section-ranked results
     total_unique = len(legislation_sections)
-    all_leg_ids = list(legislation_sections.keys())
+    title_set = set(title_match_ids)
+    title_ordered = [lid for lid in title_match_ids if lid in legislation_sections]
+    section_ordered = [lid for lid in legislation_sections if lid not in title_set]
+    all_leg_ids = title_ordered + section_ordered
     unique_leg_ids = all_leg_ids[input.offset : input.offset + input.limit]
 
     if not unique_leg_ids:
