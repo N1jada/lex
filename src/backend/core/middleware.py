@@ -3,6 +3,7 @@
 import ipaddress
 import logging
 import time
+import uuid
 
 from fastapi import Request, Response
 
@@ -104,10 +105,14 @@ async def monitoring_and_rate_limit_middleware(request: Request, call_next):
     minute_count = 0
     hour_count = 0
 
+    # Generate or reuse request ID for correlation
+    request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+
     try:
         # Skip rate limiting for health checks
         if request.url.path in ["/healthcheck", "/health"]:
             response = await call_next(request)
+            response.headers["X-Request-ID"] = request_id
             return response
 
         # Get client IP and check rate limits
@@ -134,6 +139,7 @@ async def monitoring_and_rate_limit_middleware(request: Request, call_next):
                 media_type="text/plain",
             )
             add_rate_limit_headers(response, minute_count, hour_count)
+            response.headers["X-Request-ID"] = request_id
             return response
 
         # Process the request
@@ -143,6 +149,7 @@ async def monitoring_and_rate_limit_middleware(request: Request, call_next):
         # Add monitoring and headers safely
         track_request_safely(request, response, duration, minute_count, hour_count)
         add_rate_limit_headers(response, minute_count, hour_count)
+        response.headers["X-Request-ID"] = request_id
 
         return response
 

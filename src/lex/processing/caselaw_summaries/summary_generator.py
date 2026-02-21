@@ -175,7 +175,7 @@ def create_summary_from_caselaw(
 
 
 def add_summaries_to_caselaw(
-    caselaw_items: list[Caselaw], model: str = "gpt-5-nano", max_workers: int = 25
+    caselaw_items: list[Caselaw], model: str = "gpt-5-nano", max_workers: int = 5
 ) -> list[CaselawSummary]:
     """
     Generate AI summaries for a list of caselaw items in parallel.

@@ -17,6 +17,7 @@ from qdrant_client.http.exceptions import UnexpectedResponse
 from qdrant_client.models import PointStruct
 
 from lex.core.embeddings import (
+    DEFAULT_MAX_WORKERS,
     generate_dense_embeddings_batch,
     generate_sparse_embeddings_batch,
 )
@@ -566,7 +567,7 @@ def upload_to_qdrant(
         ]
 
         # Generate embeddings in parallel (MUCH FASTER!)
-        dense_vectors = generate_dense_embeddings_batch(texts, max_workers=10)
+        dense_vectors = generate_dense_embeddings_batch(texts, max_workers=DEFAULT_MAX_WORKERS)
         sparse_vectors = generate_sparse_embeddings_batch(texts)
 
         # Assemble points
@@ -623,7 +624,7 @@ def upload_to_qdrant(
         texts = [f"{section.title} {section.text}" for section in batch]
 
         # Generate embeddings in parallel (MUCH FASTER!)
-        dense_vectors = generate_dense_embeddings_batch(texts, max_workers=10)
+        dense_vectors = generate_dense_embeddings_batch(texts, max_workers=DEFAULT_MAX_WORKERS)
         sparse_vectors = generate_sparse_embeddings_batch(texts)
 
         # Assemble points

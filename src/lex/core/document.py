@@ -147,9 +147,14 @@ def upload_documents(
                     doc_metadata.append((doc_id, doc))
 
                 # Generate embeddings in batch (no cache overhead)
-                from lex.core.embeddings import generate_hybrid_embeddings_batch
+                from lex.core.embeddings import (
+                    DEFAULT_MAX_WORKERS,
+                    generate_hybrid_embeddings_batch,
+                )
 
-                embeddings = generate_hybrid_embeddings_batch(texts, max_workers=25)
+                embeddings = generate_hybrid_embeddings_batch(
+                    texts, max_workers=DEFAULT_MAX_WORKERS
+                )
 
                 # Create points with batch embeddings
                 points = []

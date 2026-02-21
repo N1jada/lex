@@ -1,8 +1,9 @@
 """FastAPI application creation and configuration."""
 
 import logging
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI  # noqa: I001 - asynccontextmanager must precede FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -19,6 +20,23 @@ from backend.monitoring import monitoring
 from backend.stats.router import router as stats_router
 from backend.templates.router import router as template_router
 
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Graceful startup/shutdown: flush caches and log lifecycle events."""
+    logger.info("Application starting up")
+    yield
+    logger.info("Application shutting down — flushing caches")
+    try:
+        from backend.legislation.router import _html_cache
+
+        _html_cache.clear()
+    except Exception:
+        pass
+    logger.info("Shutdown complete")
+
 
 def create_base_app():
     """Create the base FastAPI app with routes and middleware."""
@@ -27,6 +45,7 @@ def create_base_app():
         description="API for accessing Lex's legislation search capabilities",
         version="0.1.0",
         redirect_slashes=False,
+        lifespan=_lifespan,
     )
 
     # Add monitoring and rate limiting middleware

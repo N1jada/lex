@@ -193,7 +193,7 @@ Write densely and efficiently. Favor clarity over length. Keep each part to 1-2 
 
 
 def add_explanations_to_amendments(
-    amendments: list[Amendment], model: str = "gpt-5-nano", max_workers: int = 25
+    amendments: list[Amendment], model: str = "gpt-5-nano", max_workers: int = 5
 ) -> list[Amendment]:
     """
     Generate AI explanations for a list of amendments in parallel.

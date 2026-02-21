@@ -34,15 +34,17 @@ class CaselawSearch(BaseModel):
         default=None, description="Filter by court division."
     )
     year_from: Optional[int] = Field(
-        default=None, description="Filter by cases from this year onwards."
+        default=None, ge=1267, le=2100, description="Filter by cases from this year onwards."
     )
-    year_to: Optional[int] = Field(default=None, description="Filter by cases up to this year.")
+    year_to: Optional[int] = Field(
+        default=None, ge=1267, le=2100, description="Filter by cases up to this year."
+    )
     offset: int = Field(
         default=0,
         ge=0,
         description="The number of results to skip (for pagination).",
     )
-    size: int = Field(default=20, description="Maximum number of results to return.")
+    size: int = Field(default=20, ge=1, le=100, description="Maximum number of results to return.")
 
 
 class CaselawSectionSearch(BaseModel):
@@ -58,15 +60,19 @@ class CaselawSectionSearch(BaseModel):
         default=None, description="Filter by court division."
     )
     year_from: Optional[int] = Field(
-        default=None, description="Filter by cases from this year onwards."
+        default=None, ge=1267, le=2100, description="Filter by cases from this year onwards."
     )
-    year_to: Optional[int] = Field(default=None, description="Filter by cases up to this year.")
+    year_to: Optional[int] = Field(
+        default=None, ge=1267, le=2100, description="Filter by cases up to this year."
+    )
     offset: int = Field(
         default=0,
         ge=0,
         description="The number of results to skip (for pagination).",
     )
-    limit: int = Field(default=10, description="Maximum number of results to return.")
+    limit: int = Field(
+        default=10, ge=1, le=100, description="Maximum number of results to return."
+    )
 
 
 class CaselawReferenceSearch(BaseModel):
@@ -88,12 +94,16 @@ class CaselawReferenceSearch(BaseModel):
         default=None, description="Filter by court division of the citing cases."
     )
     year_from: Optional[int] = Field(
-        default=None, description="Filter by citing cases from this year onwards."
+        default=None, ge=1267, le=2100,
+        description="Filter by citing cases from this year onwards.",
     )
     year_to: Optional[int] = Field(
-        default=None, description="Filter by citing cases up to this year."
+        default=None, ge=1267, le=2100,
+        description="Filter by citing cases up to this year.",
     )
-    size: int = Field(default=20, description="Maximum number of results to return.")
+    size: int = Field(
+        default=20, ge=1, le=100, description="Maximum number of results to return."
+    )
 
 
 class CaselawSearchResponse(BaseModel):
@@ -133,15 +143,17 @@ class CaselawSummarySearch(BaseModel):
         default=None, description="Filter by court division."
     )
     year_from: int | None = Field(
-        default=None, description="Filter by cases from this year onwards."
+        default=None, ge=1267, le=2100, description="Filter by cases from this year onwards."
     )
-    year_to: int | None = Field(default=None, description="Filter by cases up to this year.")
+    year_to: int | None = Field(
+        default=None, ge=1267, le=2100, description="Filter by cases up to this year."
+    )
     offset: int = Field(
         default=0,
         ge=0,
         description="The number of results to skip (for pagination).",
     )
-    size: int = Field(default=20, description="Maximum number of results to return.")
+    size: int = Field(default=20, ge=1, le=100, description="Maximum number of results to return.")
 
 
 class CaselawSummarySearchResponse(BaseModel):

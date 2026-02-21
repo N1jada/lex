@@ -25,10 +25,14 @@ class LegislationSectionSearch(BaseModel):
     )
     year_from: int | None = Field(
         default=None,
+        ge=1267,
+        le=2100,
         description="The starting year for the legislation to filter by. If not provided, no filtering will be applied.",
     )
     year_to: int | None = Field(
         default=None,
+        ge=1267,
+        le=2100,
         description="The ending year for the legislation to filter by. If not provided, no filtering will be applied.",
     )
     offset: int = Field(
@@ -38,6 +42,8 @@ class LegislationSectionSearch(BaseModel):
     )
     size: int = Field(
         default=10,
+        ge=1,
+        le=100,
         description="The number of results to return.",
     )
     include_text: bool = Field(
@@ -63,10 +69,14 @@ class LegislationActSearch(BaseModel):
     )
     year_from: int | None = Field(
         default=None,
+        ge=1267,
+        le=2100,
         description="Starting year filter (optional).",
     )
     year_to: int | None = Field(
         default=None,
+        ge=1267,
+        le=2100,
         description="Ending year filter (optional).",
     )
     legislation_type: list[LegislationType] | None = Field(
@@ -80,6 +90,8 @@ class LegislationActSearch(BaseModel):
     )
     limit: int = Field(
         default=10,
+        ge=1,
+        le=100,
         description="Number of results to return.",
     )
     include_text: bool = Field(
@@ -113,6 +125,8 @@ class LegislationSectionLookup(BaseModel):
     )
     limit: int = Field(
         default=10,
+        ge=1,
+        le=100,
         description="The number of results to return.",
     )
 

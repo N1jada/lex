@@ -3,6 +3,7 @@
 import hashlib
 import json
 import logging
+import time
 from datetime import datetime, timedelta
 from functools import wraps
 from typing import Any, Dict, Optional
@@ -10,6 +11,8 @@ from typing import Any, Dict, Optional
 import redis
 
 from backend.core.config import DEFAULT_CACHE_TTL, REDIS_PASSWORD, REDIS_URL
+
+logger = logging.getLogger(__name__)
 
 
 class SmartCache:
@@ -19,6 +22,7 @@ class SmartCache:
         self.redis_client = None
         self.memory_cache: Dict[str, Dict[str, Any]] = {}
         self.use_redis = False
+        self._fallback_since: float | None = None
 
         # Try to connect to Redis
         if REDIS_URL:
@@ -34,11 +38,26 @@ class SmartCache:
                 # Test connection
                 self.redis_client.ping()
                 self.use_redis = True
-                logging.info("Connected to Redis for caching and rate limiting")
+                logger.info("Connected to Redis for caching and rate limiting")
             except Exception as e:
-                logging.warning(f"Failed to connect to Redis, using in-memory cache: {e}")
+                self._fallback_since = time.monotonic()
+                logger.warning("Failed to connect to Redis, using in-memory cache: %s", e)
         else:
-            logging.info("No Redis URL configured, using in-memory cache")
+            logger.info("No Redis URL configured, using in-memory cache")
+
+    def _enter_fallback(self, operation: str, error: Exception) -> None:
+        """Track and log Redis fallback events."""
+        if self._fallback_since is None:
+            self._fallback_since = time.monotonic()
+        elapsed = time.monotonic() - self._fallback_since
+        level = logging.ERROR if elapsed > 300 else logging.WARNING
+        logger.log(
+            level,
+            "Redis %s failed (fallback active for %.0fs): %s",
+            operation,
+            elapsed,
+            error,
+        )
 
     def get(self, key: str) -> Optional[Any]:
         """Get value from cache."""
@@ -47,7 +66,7 @@ class SmartCache:
                 value = self.redis_client.get(key)
                 return json.loads(value) if value else None
             except Exception as e:
-                logging.error(f"Redis get error: {e}")
+                self._enter_fallback("get", e)
                 return None
         else:
             # Check memory cache with TTL
@@ -77,7 +96,7 @@ class SmartCache:
                 self.redis_client.setex(key, ttl, json.dumps(serializable_value, default=str))
                 return True
             except Exception as e:
-                logging.error(f"Redis set error: {e}")
+                self._enter_fallback("set", e)
                 return False
         else:
             # Store in memory with expiration
@@ -104,7 +123,7 @@ class SmartCache:
                 result = pipe.execute()
                 return result[0]  # Return the incremented value
             except Exception as e:
-                logging.error(f"Redis increment error: {e}")
+                self._enter_fallback("increment", e)
                 return 0
         else:
             # In-memory rate limiting
