@@ -33,7 +33,7 @@ def get_qdrant_client() -> QdrantClient:
         client = QdrantClient(
             url=QDRANT_CLOUD_URL,
             api_key=QDRANT_CLOUD_API_KEY,
-            timeout=360,
+            timeout=30,
         )
         logger.info(f"Connecting to Qdrant Cloud: {QDRANT_CLOUD_URL}")
     else:
@@ -41,7 +41,7 @@ def get_qdrant_client() -> QdrantClient:
             url=QDRANT_HOST,
             port=QDRANT_GRPC_PORT,
             api_key=QDRANT_API_KEY,
-            timeout=360,  # Increased for large document batches (caselaw can be 260K+ chars)
+            timeout=30,
         )
         logger.info(f"Connecting to local Qdrant: {QDRANT_HOST}")
 
@@ -63,5 +63,20 @@ def get_qdrant_client() -> QdrantClient:
         raise
 
 
-# Global client instance
-qdrant_client = get_qdrant_client()
+class _LazyClient:
+    """Lazy proxy that defers Qdrant client creation until first use."""
+
+    def __init__(self):
+        self._client = None
+
+    def _ensure_client(self):
+        if self._client is None:
+            self._client = get_qdrant_client()
+
+    def __getattr__(self, name):
+        self._ensure_client()
+        return getattr(self._client, name)
+
+
+# Global lazy client instance — compatible with `from lex.core.qdrant_client import qdrant_client`
+qdrant_client = _LazyClient()

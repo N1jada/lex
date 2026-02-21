@@ -15,5 +15,14 @@ RATE_LIMIT_TTL_HOUR = 3600
 REDIS_URL = os.getenv("REDIS_URL")
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
 
+# CORS configuration
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ORIGINS", "http://localhost:3000,http://localhost:3001"
+    ).split(",")
+    if origin.strip()
+]
+
 # Azure Monitor configuration
 APPLICATIONINSIGHTS_CONNECTION_STRING = os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING")

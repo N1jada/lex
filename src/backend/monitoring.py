@@ -565,23 +565,10 @@ class LexMonitoring:
         )
 
     def _get_client_ip(self, request: Request) -> str:
-        """Extract client IP address considering Azure proxies."""
-        # Check Azure Front Door headers first
-        forwarded_for = request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
-        if forwarded_for:
-            return forwarded_for
+        """Extract client IP address, delegating to the middleware helper."""
+        from backend.core.middleware import get_client_ip
 
-        # Check other common proxy headers
-        real_ip = request.headers.get("X-Real-IP", "")
-        if real_ip:
-            return real_ip
-
-        client_ip = request.headers.get("X-Client-IP", "")
-        if client_ip:
-            return client_ip
-
-        # Fallback to direct client host
-        return getattr(request.client, "host", "unknown") if request.client else "unknown"
+        return get_client_ip(request)
 
     def _anonymise_ip(self, ip: str) -> str:
         """Anonymise IP address for privacy compliance (keep first 3 octets for regional analytics)."""

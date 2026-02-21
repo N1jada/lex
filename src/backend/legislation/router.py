@@ -1,9 +1,11 @@
 import asyncio
 import logging
-from datetime import datetime, timedelta
+import re
 from typing import List
+from urllib.parse import urlparse
 
 import httpx
+from cachetools import TTLCache
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
@@ -28,32 +30,12 @@ from lex.legislation.models import Legislation, LegislationSection
 
 logger = logging.getLogger(__name__)
 
-# Simple in-memory cache for legislation HTML
-# Format: {legislation_id: (content_bytes, content_type, cached_at)}
-_html_cache: dict[str, tuple[bytes, str, datetime]] = {}
-_CACHE_TTL = timedelta(hours=24)
-_MAX_CACHE_SIZE = 1500  # ~750MB-1.5GB depending on doc sizes
+# TTL cache for legislation HTML: max 500 entries, 24-hour TTL
+# Format: {legislation_id: (content_bytes, content_type)}
+_html_cache: TTLCache = TTLCache(maxsize=500, ttl=86400)
 
-
-def _get_cached_html(legislation_id: str) -> tuple[bytes, str] | None:
-    """Get cached HTML if available and not expired."""
-    if legislation_id in _html_cache:
-        content, content_type, cached_at = _html_cache[legislation_id]
-        if datetime.now() - cached_at < _CACHE_TTL:
-            return (content, content_type)
-        # Expired - remove it
-        del _html_cache[legislation_id]
-    return None
-
-
-def _cache_html(legislation_id: str, content: bytes, content_type: str) -> None:
-    """Cache HTML content with simple LRU eviction."""
-    _html_cache[legislation_id] = (content, content_type, datetime.now())
-
-    # Simple eviction: remove oldest if over limit
-    if len(_html_cache) > _MAX_CACHE_SIZE:
-        oldest_id = min(_html_cache.items(), key=lambda x: x[1][2])[0]
-        del _html_cache[oldest_id]
+# Regex to validate legislation IDs — prevents SSRF via path traversal
+_LEGISLATION_ID_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9-]*/\d{4}/\d+(/[a-zA-Z0-9._/-]*)?$")
 
 
 router = APIRouter(
@@ -161,9 +143,16 @@ async def proxy_legislation_data(legislation_id: str):
     Returns:
         HTML content from legislation.gov.uk with CORS headers
     """
+    # Validate legislation_id format to prevent SSRF
+    if not _LEGISLATION_ID_RE.match(legislation_id):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid legislation ID format: {legislation_id}",
+        )
+
     try:
         # Check cache first
-        cached = _get_cached_html(legislation_id)
+        cached = _html_cache.get(legislation_id)
         if cached:
             content, content_type = cached
             return Response(
@@ -179,6 +168,11 @@ async def proxy_legislation_data(legislation_id: str):
         # Cache miss - fetch from legislation.gov.uk with retry logic
         url = f"https://www.legislation.gov.uk/{legislation_id}"
 
+        # Double-check the constructed URL points to the expected host
+        parsed = urlparse(url)
+        if parsed.hostname != "www.legislation.gov.uk":
+            raise HTTPException(status_code=400, detail="Invalid legislation URL")
+
         # Retry logic for rate limiting (429/436) with exponential backoff
         max_retries = 5
         base_delay = 1.0
@@ -186,7 +180,7 @@ async def proxy_legislation_data(legislation_id: str):
         async with httpx.AsyncClient(timeout=30.0) as client:
             for attempt in range(max_retries):
                 try:
-                    response = await client.get(url, follow_redirects=True)
+                    response = await client.get(url, follow_redirects=False)
 
                     # Handle rate limiting - retry with exponential backoff
                     if response.status_code in [429, 436]:
@@ -222,7 +216,7 @@ async def proxy_legislation_data(legislation_id: str):
 
                     # Cache the response
                     content_type = response.headers.get("content-type", "text/html")
-                    _cache_html(legislation_id, response.content, content_type)
+                    _html_cache[legislation_id] = (response.content, content_type)
 
                     # Return the HTML content with appropriate headers
                     return Response(

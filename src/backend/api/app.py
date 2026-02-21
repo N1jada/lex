@@ -8,8 +8,8 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.amendment.router import router as amendment_router
-
 from backend.caselaw.router import router as caselaw_router
+from backend.core.config import CORS_ORIGINS
 from backend.core.middleware import monitoring_and_rate_limit_middleware
 from backend.core.telemetry import instrument_fastapi_app
 from backend.explanatory_note.router import router as explanatory_note_router
@@ -35,10 +35,10 @@ def create_base_app():
     # Configure CORS
     base_app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # Allow all origins for public API
+        allow_origins=CORS_ORIGINS,
         allow_credentials=False,
         allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["*", "MCP-Protocol-Version", "mcp-session-id"],
+        allow_headers=["Content-Type", "MCP-Protocol-Version", "mcp-session-id"],
     )
 
     # Instrument FastAPI with OpenTelemetry
@@ -56,6 +56,7 @@ def create_base_app():
     @base_app.get("/healthcheck")
     async def health_check():
         """Health check with Qdrant connection verification."""
+        logger = logging.getLogger(__name__)
         try:
             from lex.core.qdrant_client import qdrant_client
 
@@ -72,17 +73,15 @@ def create_base_app():
                     else str(info.status),
                 }
 
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "status": "healthy",
-                    "database": "qdrant",
-                    "collections": len(collections.collections),
-                    "collection_details": collection_info,
-                },
+            logger.info(
+                "Healthcheck OK: %d collections", len(collections.collections),
+                extra={"collection_details": collection_info},
             )
+
+            return JSONResponse(status_code=200, content={"status": "healthy"})
         except Exception as e:
-            return JSONResponse(status_code=503, content={"status": "unhealthy", "error": str(e)})
+            logger.error("Healthcheck failed: %s", e, exc_info=True)
+            return JSONResponse(status_code=503, content={"status": "unhealthy"})
 
     return base_app
 

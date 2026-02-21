@@ -1,6 +1,7 @@
 """Error handling utilities for FastAPI routers."""
 
-import traceback
+import logging
+import uuid
 from functools import wraps
 from typing import Callable, TypeVar
 
@@ -8,13 +9,15 @@ from fastapi import HTTPException
 
 T = TypeVar("T")
 
+logger = logging.getLogger(__name__)
+
 
 def handle_errors(func: Callable[..., T]) -> Callable[..., T]:
     """
-    Decorator that catches exceptions and converts them to HTTPException with detailed error info.
+    Decorator that catches exceptions and converts them to HTTPException.
 
     Preserves HTTPExceptions (for auth, validation, etc.) but wraps unexpected exceptions
-    with traceback details for debugging.
+    with a sanitized error message and correlation ID. Full tracebacks are logged server-side.
     """
 
     @wraps(func)
@@ -25,12 +28,16 @@ def handle_errors(func: Callable[..., T]) -> Callable[..., T]:
             # Re-raise FastAPI HTTPExceptions unchanged (e.g., 404, 401, etc.)
             raise
         except Exception as e:
-            # Wrap unexpected errors with detailed context
-            error_detail = {
-                "error_type": type(e).__name__,
-                "error_message": str(e),
-                "traceback": traceback.format_exc(),
-            }
-            raise HTTPException(status_code=500, detail=error_detail)
+            request_id = str(uuid.uuid4())
+            logger.error(
+                "Unhandled error [request_id=%s]: %s",
+                request_id,
+                e,
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail={"error": "Internal server error", "request_id": request_id},
+            )
 
     return wrapper

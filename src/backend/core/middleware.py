@@ -1,5 +1,7 @@
 """Rate limiting and monitoring middleware."""
 
+import ipaddress
+import logging
 import time
 
 from fastapi import Request, Response
@@ -8,22 +10,41 @@ from backend.core.cache import cache
 from backend.core.config import RATE_LIMIT_PER_HOUR, RATE_LIMIT_PER_MINUTE
 from backend.monitoring import monitoring
 
+logger = logging.getLogger(__name__)
+
+# Private/trusted networks — only trust proxy headers from these ranges
+_TRUSTED_NETWORKS = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+)
+
+
+def _is_trusted_proxy(ip: str) -> bool:
+    """Check if the direct connection IP is a trusted proxy (private network)."""
+    try:
+        addr = ipaddress.ip_address(ip)
+        return any(addr in net for net in _TRUSTED_NETWORKS)
+    except ValueError:
+        return False
+
 
 def get_client_ip(request: Request) -> str:
-    """Extract client IP considering proxy headers."""
-    # Check X-Forwarded-For header first (Azure Container Apps)
-    forwarded_for = request.headers.get("X-Forwarded-For", "").strip()
-    if forwarded_for:
-        # Take the first IP in the chain (original client)
-        return forwarded_for.split(",")[0].strip()
+    """Extract client IP, only trusting proxy headers from private IPs."""
+    direct_ip = getattr(request.client, "host", "unknown") if request.client else "unknown"
 
-    # Fallback to X-Real-IP
-    real_ip = request.headers.get("X-Real-IP", "").strip()
-    if real_ip:
-        return real_ip
+    # Only trust forwarded headers when the direct connection comes from a trusted proxy
+    if direct_ip != "unknown" and _is_trusted_proxy(direct_ip):
+        forwarded_for = request.headers.get("X-Forwarded-For", "").strip()
+        if forwarded_for:
+            return forwarded_for.split(",")[0].strip()
 
-    # Last resort: direct connection IP
-    return getattr(request.client, "host", "unknown")
+        real_ip = request.headers.get("X-Real-IP", "").strip()
+        if real_ip:
+            return real_ip
+
+    return direct_ip
 
 
 def add_rate_limit_headers(response, minute_count: int, hour_count: int) -> None:
@@ -74,7 +95,7 @@ def track_request_safely(
             )
     except Exception as e:
         # If monitoring fails, don't break the request - just log
-        print(f"Monitoring error (non-critical): {e}")
+        logger.warning("Monitoring error (non-critical): %s", e)
 
 
 async def monitoring_and_rate_limit_middleware(request: Request, call_next):

@@ -72,7 +72,7 @@ def _calculate_live_stats() -> Dict[str, Any]:
         "amendments": f"{amendments_count:,}",
         "pdf_legislation": f"{pdf_legislation_count:,}",
         "pdf_provisions": f"{pdf_sections_count:,}",
-        "last_updated": datetime.now(timezone.utc).strftime("%H:%M UTC"),
+        "checked_at": datetime.now(timezone.utc).strftime("%H:%M UTC"),
     }
 
 
