@@ -97,7 +97,7 @@ YEARS = list(range(1267, CURRENT_YEAR + 1))  # Includes current year
 # OpenAI configuration
 # Supports both standard OpenAI and Azure OpenAI.
 # Set OPENAI_API_KEY for standard OpenAI, or AZURE_OPENAI_API_KEY + AZURE_OPENAI_ENDPOINT for Azure.
-EMBEDDING_DIMENSIONS = 1024
+EMBEDDING_DIMENSIONS = int(os.environ.get("EMBEDDING_DIMENSIONS", "1024"))
 EMBEDDING_MODEL = os.environ.get(
     "OPENAI_EMBEDDING_MODEL",
     os.environ.get("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "text-embedding-3-large"),

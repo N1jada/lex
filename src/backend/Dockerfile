@@ -20,5 +20,8 @@ RUN uv sync
 
 EXPOSE 8000
 
+HEALTHCHECK --interval=10s --timeout=5s --retries=3 \
+  CMD curl -f http://localhost:8000/healthcheck || exit 1
+
 # Use uv to run the application
 CMD ["uv", "run", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]

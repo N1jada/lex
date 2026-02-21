@@ -130,16 +130,24 @@ class SmartCache:
             now = datetime.now()
             if key not in self.memory_cache:
                 self.memory_cache[key] = {"value": 1, "expires": now + timedelta(seconds=ttl)}
-                return 1
+                result = 1
             else:
                 entry = self.memory_cache[key]
                 if now < entry["expires"]:
                     entry["value"] += 1
-                    return entry["value"]
+                    result = entry["value"]
                 else:
                     # Reset expired counter
                     self.memory_cache[key] = {"value": 1, "expires": now + timedelta(seconds=ttl)}
-                    return 1
+                    result = 1
+
+            # Periodic cleanup of expired keys to prevent unbounded growth
+            if len(self.memory_cache) > 500:
+                expired = [k for k, v in self.memory_cache.items() if now >= v["expires"]]
+                for k in expired:
+                    del self.memory_cache[k]
+
+            return result
 
     def cache_key_from_args(self, func_name: str, **kwargs) -> str:
         """Generate cache key from function name and arguments."""

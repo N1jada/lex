@@ -2,6 +2,11 @@ services:
   qdrant:
     image: qdrant/qdrant:v1.15.1
     container_name: qdrant
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     ports:
       - "6333:6333"  # HTTP API
       - "6334:6334"  # gRPC API
@@ -29,6 +34,11 @@ services:
       context: .
       dockerfile: ./src/backend/Dockerfile
     container_name: backend
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     ports:
       - "8000:8000"
     env_file:
@@ -57,6 +67,11 @@ services:
       context: .
       dockerfile: ./src/lex/Dockerfile
     container_name: pipeline
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     env_file:
       - .env
     environment:
